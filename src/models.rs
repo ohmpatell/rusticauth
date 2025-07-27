@@ -29,6 +29,31 @@ pub struct LoginUser {
     pub password: String,
 }
 
+// Response when login is successful - now includes JWT token
+#[derive(Debug, Serialize)]
+pub struct LoginResponse {
+    pub message: String,
+    pub user_id: i32,
+    pub username: String,
+    pub access_token: String,
+    pub token_type: String,
+    pub expires_in: i64, // seconds until expiration
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserProfile {
+    pub user_id: i32,
+    pub username: String,
+    pub created_at: DateTime<Utc>,
+}
+
+// Error response format
+#[derive(Debug, Serialize)]
+pub struct ErrorResponse {
+    pub error: String,
+    pub message: String,
+}
+
 // OAuth Client - represents an application that wants to use our auth server
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct OAuthClient {

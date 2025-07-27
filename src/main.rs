@@ -7,6 +7,7 @@ use tracing::{info, error};
 mod database;
 mod models;
 mod auth;
+mod jwt;
 
 // Health check endpoint - tests if our database is working
 async fn health_check(pool: web::Data<sqlx::PgPool>) -> Result<HttpResponse> {
@@ -88,6 +89,8 @@ async fn main() -> std::io::Result<()> {
             // auth routes - login and registration
             .route("/register", web::post().to(auth::register))
             .route("/login", web::post().to(auth::login))
+            //jwt verification
+            .route("/me", web::get().to(auth::get_user_profile))
 
 
     })
