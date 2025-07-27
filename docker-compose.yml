@@ -1,0 +1,26 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: rusticauth
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: rusticauth
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  rusticauth:
+    build: .
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgres://rusticauth:password@db:5432/rusticauth
+      HOST: 0.0.0.0
+      PORT: 8080
+    ports:
+      - "8080:8080"
+
+volumes:
+  db_data:
