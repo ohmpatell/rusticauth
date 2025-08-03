@@ -1,6 +1,7 @@
 use actix_web::{App, HttpServer, web, HttpResponse, Result};
+use actix_governor::{Governor, GovernorConfigBuilder};
 use dotenv::dotenv;
-use std::env;
+use std::{env, time::Duration};
 use tracing::{info, error};
 //use tracing_subscriber::FmtSubscriber;
 
@@ -76,6 +77,13 @@ async fn main() -> std::io::Result<()> {
         std::process::exit(1);
     }
 
+
+    let rate_limiter_config = GovernorConfigBuilder::default()
+        .burst_size(5)                      // max burst
+        .period(Duration::from_secs(60))    // refill interval
+        .finish()
+        .expect("invalid governor config");
+
     info!("Server starting on {}", bind);
     
     // IN THESE ROUTES, any function that accepts the type AuthenticatedUser will automatically run the auth middleware
@@ -89,12 +97,17 @@ async fn main() -> std::io::Result<()> {
             // Routes
             .route("/", web::get().to(hello))
             .route("/health", web::get().to(health_check))
-            // auth routes - login and registration
-            .route("/register", web::post().to(auth::register))
-            .route("/login", web::post().to(auth::login))
             //jwt verification
             .route("/me", web::get().to(auth::get_user_profile))
-
+            
+            // rate limited routes
+            .service(
+                web::scope("")
+                    .wrap(Governor::new(&rate_limiter_config))
+                    .route("/register", web::post().to(auth::register))
+                    .route("/login", web::post().to(auth::login))   
+            )
+            
 
     })
     .bind(&bind)?

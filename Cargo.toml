@@ -5,6 +5,10 @@ edition = "2021"
 
 [dependencies]
 actix-web = "4"
+
+# Rate Limiter
+actix-governor     = "0.3"
+
 tokio = {version = "1", features = ["full"]}
 
 serde = { version = "1.0", features = ["derive"] }
