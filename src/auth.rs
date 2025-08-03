@@ -1,6 +1,6 @@
 // login and registration here
 
-use actix_web::{web, HttpResponse, Result, HttpRequest};
+use actix_web::{web, HttpResponse, Result};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::{rand_core::OsRng, SaltString};
 use sqlx::PgPool;
@@ -154,97 +154,13 @@ pub async fn login(pool: web::Data<PgPool>, user_data: web::Json<LoginUser>) -> 
 }
 
 
-pub async fn get_user_profile(req: HttpRequest, pool: web::Data<PgPool>) ->Result<HttpResponse>{
-    // auth header - this contains the token for verification
-    let auth_header = match req.headers().get("Authorization") {
-        Some(header) => match header.to_str() {
-            Ok(header_str) => header_str,
-            Err(_) => {
-                return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-                    error: "invalid_header".to_string(),
-                    message: "Invalid Authorization header format".to_string(),
-                }));
-            }
-        },
-        None => {
-            return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
-                error: "missing_token".to_string(),
-                message: "Authorization header required".to_string(),
-            }));
-        }
-    };
-
-    // extract token
-
-    let token = match crate::jwt::extract_token_from_header(auth_header) {
-        Some(token) => token,
-        None => {
-            return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
-                error: "invalid_token_format".to_string(),
-                message: "Authorization header must be 'Bearer <token>'".to_string(),
-            }));
-        }
-    };
-
-    // verify
-    let claims = match crate::jwt::validate_token(token) {
-        Ok(claims) => claims,
-        Err(crate::jwt::JWTError::Expired) => {
-            return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
-                error: "token_expired".to_string(),
-                message: "Token has expired".to_string(),
-            }));
-        }
-        Err(_) => {
-            return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
-                error: "invalid_token".to_string(),
-                message: "Invalid token".to_string(),
-            }));
-        }
-    };
-
-
-    // if all goes well so far, get the user to return 
-    let user_id: i32 = claims.sub.parse().map_err(|_| {
-        error!("Invalid user ID in token: {}", claims.sub);
-    }).unwrap_or(0);
-
-    let user_result = sqlx::query(
-        "SELECT id, username, password_hash, created_at, updated_at FROM users WHERE id = $1")
-        .bind(user_id)
-    .fetch_optional(pool.get_ref())
-    .await;
-
-
-    match user_result {
-
-        Ok(Some(user))=> {
-            Ok(HttpResponse::Ok().json(UserProfile {
-                user_id: user.get::<i32, _>("id"),
-                username: user.get::<String, _>("username"),
-                created_at: user.get::<chrono::DateTime<chrono::Utc>, _>("created_at"),
-            }))
-        }
-        Ok(None) => {
-            warn!("Token valid but user not found: {}", user_id);
-            Ok(HttpResponse::Unauthorized().json(ErrorResponse {
-                error: "user_not_found".to_string(),
-                message: "User no longer exists".to_string(),
-            }))
-        }
-        Err(e) => {
-            error!("Database error fetching user profile: {}", e);
-            Ok(HttpResponse::InternalServerError().json(ErrorResponse {
-                error: "internal_error".to_string(),
-                message: "Failed to fetch user profile".to_string(),
-            }))
-        }
-    }
-
-
+pub async fn get_user_profile(user: crate::middleware::AuthenticatedUser) ->Result<HttpResponse>{
+    Ok(HttpResponse::Ok().json(UserProfile {
+        user_id: user.id,
+        username: user.username,
+        created_at: user.created_at
+    }))
 }
-
-
 
 // helpers
 

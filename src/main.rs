@@ -8,6 +8,7 @@ mod database;
 mod models;
 mod auth;
 mod jwt;
+mod middleware;
 
 // Health check endpoint - tests if our database is working
 async fn health_check(pool: web::Data<sqlx::PgPool>) -> Result<HttpResponse> {
@@ -77,6 +78,8 @@ async fn main() -> std::io::Result<()> {
 
     info!("Server starting on {}", bind);
     
+    // IN THESE ROUTES, any function that accepts the type AuthenticatedUser will automatically run the auth middleware
+
     HttpServer::new(move || {
         App::new()
             // Add the database pool to app data so routes can access it
