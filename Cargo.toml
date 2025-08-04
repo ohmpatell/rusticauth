@@ -44,3 +44,5 @@ ring = "0.16"
 
 # Base64 encoding/decoding
 base64 = "0.21"
+
+url = "2.0"

@@ -67,6 +67,47 @@ pub struct OAuthClient {
     pub created_at: DateTime<Utc>,
 }
 
+// for oAuth Clients
+
+#[derive(Debug, Deserialize)]
+pub struct CreateClientRequest {
+    pub client_name: String,
+    pub redirect_uris: Vec<String>,
+    pub scope: Option<String>, // Option basically means optional, default: "openid profile"
+    pub is_confidential: Option<bool> // default: true
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClientResponse {
+    pub client_id: String,
+    pub client_name: String,
+    pub redirect_uris: Vec<String>,
+    pub scope: String,
+    pub is_confidential: bool,
+    pub created_at: DateTime<Utc>
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateClientRequest {    // for an update client req.
+    pub client_name: Option<String>,
+    pub redirect_uris: Option<Vec<String>>,
+    pub scope: Option<String>,
+    pub is_confidential: Option<bool>
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateClientResponse {   // 1st time creation
+    pub client_id: String,
+    pub client_secret: String, // only during creation!
+    pub client_name: String,
+    pub redirect_uris: Vec<String>,
+    pub scope: String,
+    pub is_confidential: bool,
+    pub created_at: DateTime<Utc>,
+    pub warning: String // to warn user to save the secret
+}
+
+
 // Authorization Code - temporary code in OAuth flow
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct AuthCode {

@@ -10,6 +10,7 @@ mod models;
 mod auth;
 mod jwt;
 mod middleware;
+mod clients;
 
 // Health check endpoint - tests if our database is working
 async fn health_check(pool: web::Data<sqlx::PgPool>) -> Result<HttpResponse> {
@@ -99,6 +100,12 @@ async fn main() -> std::io::Result<()> {
             .route("/health", web::get().to(health_check))
             //jwt verification
             .route("/me", web::get().to(auth::get_user_profile))
+            //admin only - oauth2 clients
+            .route("/admin/clients", web::post().to(clients::create_client))
+            .route("/admin/clients", web::get().to(clients::list_clients))
+            .route("/admin/clients/{client_id}", web::get().to(clients::get_client))
+            .route("/admin/clients/{client_id}", web::put().to(clients::update_client))
+            .route("/admin/clients/{client_id}", web::delete().to(clients::delete_client))
             
             // rate limited routes
             .service(
