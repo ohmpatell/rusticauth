@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authorize {{ data.client_name }}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="consent-card">
+            <div class="header">
+                <h1>🔐 RusticAuth</h1>
+                <p><strong>{{ data.client_name }}</strong> wants to access your account</p>
+            </div>
+            
+            <div class="permission-details">
+                <h3>This will allow {{ data.client_name }} to:</h3>
+                <ul class="permissions">
+                    {% for scope in data.scope | split(pat=" ") %}
+                    <li>
+                        {% if scope == "openid" %}
+                        ✓ Verify your identity
+                        {% elif scope == "profile" %}
+                        ✓ Access your basic profile information
+                        {% elif scope == "email" %}
+                        ✓ Access your email address
+                        {% else %}
+                        ✓ {{ scope }}
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+
+            <div class="consent-actions">
+                <form method="POST" action="/oauth/consent">
+                    <input type="hidden" name="csrf_token" value="{{ data.csrf_token }}">
+                    
+                    <div class="button-group">
+                        <button type="submit" name="action" value="deny" class="btn-secondary">
+                            Deny
+                        </button>
+                        <button type="submit" name="action" value="allow" class="btn-primary">
+                            Allow Access
+                        </button>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="footer">
+                <p>Make sure you trust {{ data.client_name }} before granting access.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

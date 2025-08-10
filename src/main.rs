@@ -1,5 +1,7 @@
-use actix_web::{App, HttpServer, web, HttpResponse, Result};
+use actix_session::{SessionMiddleware, storage::CookieSessionStore};
+use actix_web::{cookie::Key, web, App, HttpResponse, HttpServer, Result};
 use actix_governor::{Governor, GovernorConfigBuilder};
+use actix_files::Files;
 use dotenv::dotenv;
 use std::{env, time::Duration};
 use tracing::{info, error};
@@ -11,6 +13,8 @@ mod auth;
 mod jwt;
 mod middleware;
 mod clients;
+mod oauth;
+mod templates;
 
 // Health check endpoint - tests if our database is working
 async fn health_check(pool: web::Data<sqlx::PgPool>) -> Result<HttpResponse> {
@@ -41,9 +45,6 @@ async fn hello() -> Result<HttpResponse> {
 
 fn early_debug() {
     eprintln!("RusticAuth starting debug mode...");
-    for (key, value) in std::env::vars() {
-        eprintln!("ENV {} = {}", key, value);
-    }
 }
 
 
@@ -78,6 +79,11 @@ async fn main() -> std::io::Result<()> {
         std::process::exit(1);
     }
 
+    // init templates
+    let templates = templates::init_templates();
+
+    // prod will use a fixed key, from .env?
+    let secret_key = Key::generate();
 
     let rate_limiter_config = GovernorConfigBuilder::default()
         .burst_size(5)                      // max burst
@@ -93,13 +99,33 @@ async fn main() -> std::io::Result<()> {
         App::new()
             // Add the database pool to app data so routes can access it
             .app_data(web::Data::new(pool.clone()))
+
+            // templates for the pages
+            .app_data(web::Data::new(templates.clone()))
+
+            // Session middleware
+            .wrap(SessionMiddleware::new(CookieSessionStore::default(), secret_key.clone()))
+
             // Add logging middleware
             .wrap(tracing_actix_web::TracingLogger::default())
+
+            // static files - css and js
+            .service(Files::new("/static", "./static"))
+
             // Routes
             .route("/", web::get().to(hello))
             .route("/health", web::get().to(health_check))
+
+            // OAuth2 Authorization Flow Routes
+            .route("/oauth/authorize", web::get().to(oauth::authorize))
+            .route("/oauth/login", web::get().to(oauth::oauth_login_page))
+            .route("/oauth/login", web::post().to(oauth::oauth_login))
+            .route("/oauth/consent", web::get().to(oauth::consent_page))
+            .route("/oauth/consent", web::post().to(oauth::handle_consent))
+
             //jwt verification
             .route("/me", web::get().to(auth::get_user_profile))
+            
             //admin only - oauth2 clients
             .route("/admin/clients", web::post().to(clients::create_client))
             .route("/admin/clients", web::get().to(clients::list_clients))

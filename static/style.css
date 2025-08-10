@@ -1,0 +1,162 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.container {
+    max-width: 400px;
+    width: 100%;
+    padding: 20px;
+}
+
+.auth-card, .consent-card, .error-card {
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    padding: 32px;
+    text-align: center;
+}
+
+.header h1 {
+    color: #4a5568;
+    margin-bottom: 8px;
+    font-size: 24px;
+}
+
+.header p {
+    color: #718096;
+    margin-bottom: 24px;
+}
+
+.scope-info {
+    background: #f7fafc;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 24px;
+    text-align: left;
+}
+
+.scope-list {
+    font-family: monospace;
+    background: #edf2f7;
+    padding: 8px;
+    border-radius: 4px;
+    margin-top: 8px;
+}
+
+.permission-details {
+    text-align: left;
+    margin-bottom: 24px;
+}
+
+.permissions {
+    list-style: none;
+    margin-top: 12px;
+}
+
+.permissions li {
+    padding: 8px 0;
+    color: #4a5568;
+}
+
+.form-group {
+    margin-bottom: 16px;
+    text-align: left;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 4px;
+    color: #4a5568;
+    font-weight: 500;
+}
+
+.form-group input {
+    width: 100%;
+    padding: 12px;
+    border: 2px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 16px;
+    transition: border-color 0.2s;
+}
+
+.form-group input:focus {
+    outline: none;
+    border-color: #667eea;
+}
+
+.btn-primary, .btn-secondary {
+    padding: 12px 24px;
+    border: none;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.btn-primary {
+    background: #667eea;
+    color: white;
+    width: 100%;
+}
+
+.btn-primary:hover {
+    background: #5a67d8;
+}
+
+.btn-secondary {
+    background: #e2e8f0;
+    color: #4a5568;
+}
+
+.btn-secondary:hover {
+    background: #cbd5e0;
+}
+
+.button-group {
+    display: flex;
+    gap: 12px;
+}
+
+.button-group .btn-primary,
+.button-group .btn-secondary {
+    width: auto;
+    flex: 1;
+}
+
+.error-message {
+    background: #fed7d7;
+    color: #c53030;
+    padding: 12px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+}
+
+.footer {
+    margin-top: 24px;
+    color: #718096;
+    font-size: 14px;
+}
+
+.error-details {
+    text-align: left;
+    margin-bottom: 24px;
+}
+
+.error-details h3 {
+    color: #c53030;
+    margin-bottom: 8px;
+}

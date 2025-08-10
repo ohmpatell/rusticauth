@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authorization Error</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="error-card">
+            <div class="header">
+                <h1>❌ Authorization Error</h1>
+            </div>
+            
+            <div class="error-details">
+                <h3>{{ data.error }}</h3>
+                <p>{{ data.description }}</p>
+            </div>
+            
+            {% if data.back_url %}
+            <div class="actions">
+                <a href="{{ data.back_url }}" class="btn-primary">Go Back</a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

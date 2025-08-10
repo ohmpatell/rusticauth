@@ -145,6 +145,54 @@ pub struct AuthorizeRequest {
     pub code_challenge_method: Option<String>, // PKCE
 }
 
+// session data to track the auth flow
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuthorizationSession {
+    pub client_id: String,
+    pub client_name: String,
+    pub redirect_uri: String,
+    pub scope: String,
+    pub state: Option<String>, // for CSRF protection
+    pub code_challenge: Option<String>, // PKCE
+    pub code_challenge_method: Option<String>, // PKCE
+    pub created_at: i64
+}
+
+// login form 
+#[derive(Debug, Deserialize)]
+pub struct OAuthLoginRequest {
+    pub username: String,
+    pub password: String
+}
+
+#[derive(Debug, Deserialize)] 
+pub struct ConsentRequest{
+    pub action: String,
+    pub csrf_token: String
+}
+
+// template context for rendering HTML pages
+#[derive(Debug, Serialize)]
+pub struct LoginPageContext {
+    pub client_name: String,
+    pub scope: String,
+    pub error: Option<String>
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConsentPageContext {
+    pub client_name: String,
+    pub scope: String,
+    pub csrf_token: String
+}
+
+#[derive(Debug, Serialize)]
+pub struct ErrorPageContext {
+    pub error: String,
+    pub description: String,
+    pub back_url: Option<String>
+}
+
 // OAuth Token Request - what we get when someone hits /token
 #[derive(Debug, Deserialize)]
 pub struct TokenRequest {

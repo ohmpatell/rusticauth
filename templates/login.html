@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign in to authorize {{ data.client_name }}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="auth-card">
+            <div class="header">
+                <h1>🔐 RusticAuth</h1>
+                <p>Sign in to continue to <strong>{{ data.client_name }}</strong></p>
+            </div>
+            
+            <div class="scope-info">
+                <p><strong>{{ data.client_name }}</strong> is requesting access to:</p>
+                <div class="scope-list">
+                    {{ data.scope }}
+                </div>
+            </div>
+
+            {% if data.error %}
+            <div class="error-message">
+                {{ data.error }}
+            </div>
+            {% endif %}
+
+            <form class="auth-form" action="/oauth/login" method="POST">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                
+                <button type="submit" class="btn-primary">Sign In</button>
+            </form>
+            
+            <div class="footer">
+                <p>New to RusticAuth? This is for OAuth2 authorization only.</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
