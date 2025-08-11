@@ -38,8 +38,10 @@ async fn health_check(pool: web::Data<sqlx::PgPool>) -> Result<HttpResponse> {
 
 async fn hello() -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(serde_json::json!({
-        "message": "Hello, RusticAuth!",
-        "version": "0.1.0"
+        "message": "Hello, RusticAuth OAuth2 Server!",
+        "version": "0.7.0", 
+        "oauth2_flows": ["authorization_code"],
+        "features": ["user_auth", "client_management", "authorization_flow", "token_exchange", "pkce_support", "openid_connect"]  // ← Add new features
     })))
 }
 
@@ -133,6 +135,10 @@ async fn main() -> std::io::Result<()> {
             .route("/admin/clients/{client_id}", web::put().to(clients::update_client))
             .route("/admin/clients/{client_id}", web::delete().to(clients::delete_client))
             
+            // tokens
+            .route("/oauth/token", web::post().to(oauth::token_exchange))
+            .route("/oauth/introspect", web::post().to(oauth::introspect_token))
+
             // rate limited routes
             .service(
                 web::scope("")

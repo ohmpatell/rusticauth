@@ -1,13 +1,14 @@
 use actix_web::{web, HttpResponse, Result};
 use actix_session::Session;
 use sqlx::{PgPool, Row};
-use tracing::{info, error};
+use tracing::{info, warn, error};
 use chrono::{Utc, Duration};
 use rand::{thread_rng, Rng};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as BASE64};
 
-use crate::models::{AuthorizeRequest, AuthorizationSession, ErrorResponse,
-OAuthLoginRequest, ConsentRequest, ConsentPageContext, LoginPageContext, ErrorPageContext, OAuthClient, User};
+use sha2::{Sha256, Digest};
+
+use crate::models::{AuthCode, AuthorizationSession, AuthorizeRequest, ConsentPageContext, ConsentRequest, ErrorPageContext, ErrorResponse, LoginPageContext, OAuthClient, OAuthLoginRequest, TokenRequest, TokenResponse, User, IntrospectRequest, IntrospectResponse};
 
 use crate::middleware::AuthenticatedUser;
 use crate::templates::{generate_csrf_token, render_template};
@@ -232,7 +233,184 @@ pub async fn handle_consent(pool: web::Data<PgPool>, session: Session, templates
 } 
 
 
-// helper functions
+// token exchange
+
+pub async fn token_exchange(pool: web::Data<PgPool>, form: web::Form<TokenRequest>) -> Result<HttpResponse> {
+    info!("Token exchange request: grant_type={}, client_id={}", form.grant_type, form.client_id);
+
+    // 1. Validate grant_type
+    if form.grant_type != "authorization_code" {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "unsupported_grant_type",
+            "error_description": "Only authorization_code grant type is supported"
+        })));
+    }
+
+    // 2. Look up and validate authorization code
+    let auth_code = match validate_authorization_code(&pool, &form.code, &form.client_id, &form.redirect_uri).await {
+        Ok(code) => code,
+        Err(error_response) => {
+            return Ok(HttpResponse::BadRequest().json(error_response));
+        }
+    };
+
+    // 3. Authenticate the client
+    let _client = match authenticate_client_for_token(&pool, &form.client_id, form.client_secret.as_deref()).await {
+        Ok(client) => client,
+        Err(error_response) => {
+            return Ok(HttpResponse::Unauthorized().json(error_response));
+        }
+    };
+
+    // 4. Validate PKCE if used
+    if let Some(code_challenge) = &auth_code.code_challenge {
+        if let Some(code_verifier) = &form.code_verifier {
+            if !validate_pkce(code_challenge, &auth_code.code_challenge_method, code_verifier) {
+                warn!("PKCE validation failed for client {}", form.client_id);
+                return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                    "error": "invalid_grant",
+                    "error_description": "PKCE verification failed"
+                })));
+            }
+        } else {
+            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "invalid_request", 
+                "error_description": "code_verifier required for PKCE"
+            })));
+        }
+    }
+
+    // 5. Get user information
+    let user = match get_user_by_id(&pool, auth_code.user_id).await {
+        Ok(user) => user,
+        Err(_) => {
+            error!("User not found for auth code: {}", auth_code.user_id);
+            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "invalid_grant",
+                "error_description": "Authorization code is invalid"
+            })));
+        }
+    };
+
+    // 6. Generate tokens
+    let access_token = match crate::jwt::generate_token(user.id, user.username.clone()) {
+        Ok(token) => token,
+        Err(e) => {
+            error!("Failed to generate access token: {}", e);
+            return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "server_error",
+                "error_description": "Failed to generate access token"
+            })));
+        }
+    };
+
+    let id_token = match crate::jwt::generate_id_token(user.id, user.username.clone(), form.client_id.clone()) {
+        Ok(token) => Some(token),
+        Err(e) => {
+            warn!("Failed to generate ID token: {}", e);
+            None // ID token is optional, continue without it
+        }
+    };
+
+    // 7. Generate and store refresh token
+    let refresh_token = crate::jwt::generate_refresh_token();
+    let refresh_expires_at = chrono::Utc::now() + chrono::Duration::days(30); // 30 days
+
+    if let Err(e) = store_refresh_token(&pool, &refresh_token, user.id, &form.client_id, auth_code.scope.as_deref(), refresh_expires_at).await {
+        error!("Failed to store refresh token: {}", e);
+        // Continue without refresh token rather than failing
+    }
+
+    // 8. Delete used authorization code (single-use security)
+    if let Err(e) = delete_authorization_code(&pool, &form.code).await {
+        warn!("Failed to delete authorization code: {}", e);
+        // Not critical, continue
+    }
+
+    info!("Token exchange successful for user {} and client {}", user.id, form.client_id);
+
+    // 9. Return token response
+    Ok(HttpResponse::Ok().json(TokenResponse {
+        access_token,
+        token_type: "Bearer".to_string(),
+        expires_in: 24 * 60 * 60, // 24 hours
+        refresh_token: Some(refresh_token),
+        id_token,
+    }))
+
+}
+
+
+// Token Introspection Endpoint (RFC 7662)
+
+pub async fn introspect_token(pool: web::Data<PgPool>, form: web::Form<IntrospectRequest>) -> Result<HttpResponse> {
+    info!("Token introspection request from client: {}", form.client_id);
+
+    // 1. Authenticate the client making the introspection request
+    let _client = match authenticate_client_for_token(&pool, &form.client_id, form.client_secret.as_deref()).await {
+        Ok(client) => client,
+        Err(_) => {
+            // For introspection, we return "active: false" for auth failures
+            return Ok(HttpResponse::Ok().json(IntrospectResponse {
+                active: false,
+                client_id: None,
+                username: None,
+                scope: None,
+                exp: None,
+            }));
+        }
+    };
+
+    // 2. Try to validate the token as a JWT (access token)
+    match crate::jwt::validate_token(&form.token) {
+        Ok(claims) => {
+            // Token is valid - extract information
+            let _user_id: i32 = claims.sub.parse().unwrap_or(0);
+            let username = Some(claims.username.clone());
+            let exp = Some(claims.exp);
+
+            Ok(HttpResponse::Ok().json(crate::models::IntrospectResponse {
+                active: true,
+                client_id: Some(form.client_id.clone()),
+                username,
+                scope: Some("openid profile".to_string()), // Default scope
+                exp,
+            }))
+        }
+        Err(_) => {
+            // Not a valid JWT, check if it's a refresh token
+            match validate_refresh_token(&pool, &form.token).await {
+                Ok((user_id, scope)) => {
+                    let user = get_user_by_id(&pool, user_id).await.ok();
+                    
+                    Ok(HttpResponse::Ok().json(crate::models::IntrospectResponse {
+                        active: true,
+                        client_id: Some(form.client_id.clone()),
+                        username: user.map(|u| u.username),
+                        scope,
+                        exp: None, // Refresh tokens don't have exp in introspection
+                    }))
+                }
+                Err(_) => {
+                    // Token is not valid
+                    Ok(HttpResponse::Ok().json(crate::models::IntrospectResponse {
+                        active: false,
+                        client_id: None,
+                        username: None,
+                        scope: None,
+                        exp: None,
+                    }))
+                }
+            }
+        }
+    }
+}
+
+
+
+//   === helper functions
+
+// for authorization flow
 
 async fn validate_client(pool: &PgPool, client_id: &str, redirect_uri: &str) -> Result<OAuthClient, ErrorResponse>{
     let client = match sqlx::query(
@@ -341,6 +519,208 @@ async fn generate_authorization_code(pool: &PgPool, user_id: i32, auth_session: 
     Ok(code)
 }
 
+
+// helpers for token exchange
+
+async fn validate_authorization_code(pool: &PgPool, code: &str, client_id: &str, redirect_uri: &str) -> Result<AuthCode, ErrorResponse> {
+    let auth_code = match sqlx::query(
+    "SELECT code, client_id, user_id, redirect_uri, scope, code_challenge, code_challenge_method, expires_at, created_at 
+        FROM auth_codes WHERE code = $1"
+    )
+    .bind(code)
+    .fetch_optional(pool)
+    .await
+    {
+        Ok(Some(row)) => {
+            AuthCode {
+                code: row.get("code"),
+                client_id: row.get("client_id"),
+                user_id: row.get("user_id"),
+                redirect_uri: row.get("redirect_uri"),
+                scope: row.get("scope"),
+                code_challenge: row.get("code_challenge"),
+                code_challenge_method: row.get("code_challenge_method"),
+                expires_at: row.get("expires_at"),
+                created_at: row.get("created_at"),
+            }
+        }
+        Ok(None) => {
+            warn!("Authorization code not found: {}", code);
+            return Err(ErrorResponse {
+                error: "invalid_grant".to_string(),
+                message: "Authorization code is invalid or expired".to_string(),
+            });
+        }
+        Err(e) => {
+            error!("Database error looking up auth code: {}", e);
+            return Err(ErrorResponse {
+                error: "server_error".to_string(),
+                message: "Database error".to_string(),
+            });
+        }
+    };
+
+    // expiry check
+    if auth_code.expires_at < chrono::Utc::now() {
+        warn!("Authorization code expired: {}", code);
+        return Err(ErrorResponse {
+            error: "invalid_grant".to_string(),
+            message: "Authorization code has expired".to_string(),
+        });
+    }
+
+    // client id check
+    if auth_code.client_id != client_id {
+        warn!("Authorization code client_id mismatch: expected {}, got {}", auth_code.client_id, client_id);
+        return Err(ErrorResponse {
+            error: "invalid_grant".to_string(),
+            message: "Authorization code was issued to a different client".to_string(),
+        });
+    }
+
+    // redirect_uri 
+    if auth_code.redirect_uri != redirect_uri {
+        warn!("Authorization code redirect_uri mismatch: expected {}, got {}", auth_code.redirect_uri, redirect_uri);
+        return Err(ErrorResponse {
+            error: "invalid_grant".to_string(),
+            message: "Redirect URI does not match".to_string(),
+        });
+    }
+
+    Ok(auth_code)
+}
+
+async fn authenticate_client_for_token(pool: &PgPool, client_id: &str, client_secret: Option<&str>) -> Result<OAuthClient, ErrorResponse> {
+    let client = match sqlx::query(
+        "SELECT id, client_id, client_secret, client_name, redirect_uris, scope, is_confidential, created_at 
+         FROM oauth_clients WHERE client_id = $1")
+    .bind(client_id)
+    .fetch_optional(pool)
+    .await{
+        Ok(Some(row)) => {
+            OAuthClient {
+                id: row.get("id"),
+                client_id: row.get("client_id"),
+                client_secret: row.get("client_secret"),
+                client_name: row.get("client_name"),
+                redirect_uris: row.get("redirect_uris"),
+                scope: row.get("scope"),
+                is_confidential: row.get("is_confidential"),
+                created_at: row.get("created_at"),
+            }
+        }
+        Ok(None) => {
+            warn!("Client not found: {}", client_id);
+            return Err(crate::models::ErrorResponse {
+                error: "invalid_client".to_string(),
+                message: "Client authentication failed".to_string(),
+            });
+        }
+        Err(e) => {
+            error!("Database error looking up client: {}", e);
+            return Err(ErrorResponse {
+                error: "server_error".to_string(),
+                message: "Database error".to_string(),
+            });
+        }
+    };
+
+    if client.is_confidential {
+        match client_secret {
+            Some(provided_secret) => {
+                if provided_secret != client.client_secret {
+                    warn!("Invalid client_secret for client {}", client_id);
+                    return Err(ErrorResponse {
+                        error: "invalid_client".to_string(),
+                        message: "Client authentication failed".to_string(),
+                    });
+                }
+            }
+            None => {
+                 warn!("Missing client_secret for confidential client {}", client_id);
+                return Err(ErrorResponse {
+                    error: "invalid_client".to_string(),
+                    message: "Client secret required for confidential clients".to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(client)
+}
+
+
+fn validate_pkce(stored_challenge: &str, challenge_method: &Option<String>, provided_verifier: &str) -> bool {
+    match challenge_method.as_deref() {
+        Some("S256") | None => {
+            // hash the verifier with SHA256 and base64 encode
+            let mut hasher = Sha256::new();
+            hasher.update(provided_verifier.as_bytes());
+            let hash = hasher.finalize();
+            let encoded = BASE64.encode(hash);
+            
+            encoded == stored_challenge
+        }
+        Some("plain") => {
+            // plain text comparison
+            provided_verifier == stored_challenge
+        }
+        _ => false, // unknown method
+    }
+} 
+
+async fn get_user_by_id(pool: &PgPool, user_id: i32) -> Result<User, sqlx::Error> {
+    match sqlx::query_as::<_, User>(
+        "SELECT id, username, password_hash, created_at, updated_at 
+         FROM users 
+         WHERE id = $1"
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?
+    {
+        Some(user) => Ok(user),
+        None => Err(sqlx::Error::RowNotFound),
+    }
+}
+
+async fn store_refresh_token(pool: &PgPool, token: &str, user_id: i32, client_id: &str, scope: Option<&str>, expires_at: chrono::DateTime<chrono::Utc>) -> Result<(), sqlx::Error> {
+    sqlx::query(
+    "INSERT INTO refresh_tokens (token, user_id, client_id, scope, expires_at) VALUES ($1, $2, $3, $4, $5)")
+    .bind(token)
+    .bind(user_id)
+    .bind(client_id)
+    .bind(scope)
+    .bind(expires_at)
+    .execute(pool)
+    .await?;
+    
+    Ok(())
+}
+
+async fn delete_authorization_code(pool: &PgPool, code: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM auth_codes WHERE code = $1")
+        .bind(code)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn validate_refresh_token(pool: &PgPool, token: &str) -> Result<(i32, Option<String>), sqlx::Error> {
+    let refresh_token = sqlx::query(
+        "SELECT user_id, scope, expires_at FROM refresh_tokens WHERE token = $1 AND expires_at > NOW()")
+    .bind(token)
+    .fetch_optional(pool)
+    .await?;
+
+    match refresh_token {
+        Some(rt) => Ok((
+            rt.get("user_id"), 
+            rt.get("scope")
+        )),
+        None => Err(sqlx::Error::RowNotFound),
+    }
+}
 
 
 // pages

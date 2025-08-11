@@ -213,3 +213,25 @@ pub struct TokenResponse {
     pub refresh_token: Option<String>,
     pub id_token: Option<String>, // for OpenID Connect
 }
+
+// Token Introspection models
+
+#[derive(Debug, Deserialize)]
+pub struct IntrospectRequest {
+    pub token: String,
+    pub client_id: String,
+    pub client_secret: Option<String>
+}
+
+#[derive(Debug, Serialize)]
+pub struct IntrospectResponse {
+    pub active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exp: Option<i64>,
+}
