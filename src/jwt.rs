@@ -111,7 +111,7 @@ pub fn generate_id_token(user_id: i32, username: String, client_id: String) -> R
 // secure refresh token - long lived
 pub fn generate_refresh_token() -> String {
     let mut rng = thread_rng();
-    let mut token_bytes = [0u8, 32];
+    let mut token_bytes = [0u8; 32];
     rng.fill(& mut token_bytes);
     BASE64.encode(token_bytes)
 }
