@@ -1,6 +1,6 @@
 use actix_session::{SessionMiddleware, storage::CookieSessionStore};
 use actix_web::{cookie::Key, web, App, HttpResponse, HttpServer, Result};
-use actix_governor::{Governor, GovernorConfigBuilder};
+use actix_governor::{Governor, GovernorConfigBuilder, PeerIpKeyExtractor};
 use actix_files::Files;
 use dotenv::dotenv;
 use std::{env, time::Duration};
@@ -15,6 +15,7 @@ mod middleware;
 mod clients;
 mod oauth;
 mod templates;
+mod cleanup;
 
 // Health check endpoint - tests if our database is working
 async fn health_check(pool: web::Data<sqlx::PgPool>) -> Result<HttpResponse> {
@@ -93,7 +94,16 @@ async fn main() -> std::io::Result<()> {
         .finish()
         .expect("invalid governor config");
 
+    let client_rate_config = GovernorConfigBuilder::default()
+        .burst_size(10)
+        .period(Duration::from_secs(60))
+        .key_extractor(PeerIpKeyExtractor)
+        .finish()
+        .expect("invalid config");
+
     info!("Server starting on {}", bind);
+
+    cleanup::start_cleanup(pool.clone());
     
     // IN THESE ROUTES, any function that accepts the type AuthenticatedUser will automatically run the auth middleware
 
@@ -119,16 +129,10 @@ async fn main() -> std::io::Result<()> {
             .route("/health", web::get().to(health_check))
 
             // OAuth2 Authorization Flow Routes
-            .route("/oauth/authorize", web::get().to(oauth::authorize))
-            .route("/oauth/login", web::get().to(oauth::oauth_login_page))
-            .route("/oauth/login", web::post().to(oauth::oauth_login))
-            .route("/oauth/consent", web::get().to(oauth::consent_page))
-            .route("/oauth/consent", web::post().to(oauth::handle_consent))
-            .route("/oauth/revoke", web::post().to(oauth::revoke_token))
+            
 
             // OIDC routes
             .route("/.well-known/openid-configuration", web::get().to(oauth::oidc_discovery))
-            .route("/oauth/userinfo", web::get().to(oauth::userinfo))
 
             //jwt verification
             .route("/me", web::get().to(auth::get_user_profile))
@@ -139,10 +143,23 @@ async fn main() -> std::io::Result<()> {
             .route("/admin/clients/{client_id}", web::get().to(clients::get_client))
             .route("/admin/clients/{client_id}", web::put().to(clients::update_client))
             .route("/admin/clients/{client_id}", web::delete().to(clients::delete_client))
-            
+            .route("/admin/metrics", web::get().to(oauth::get_metrics))
+
             // tokens
-            .route("/oauth/token", web::post().to(oauth::token_exchange))
-            .route("/oauth/introspect", web::post().to(oauth::introspect_token))
+            
+            .service(
+                web::scope("/oauth")
+                    .wrap(Governor::new(&client_rate_config))
+                    .route("/authorize", web::get().to(oauth::authorize))
+                    .route("/login", web::get().to(oauth::oauth_login_page))
+                    .route("/login", web::post().to(oauth::oauth_login))
+                    .route("/consent", web::get().to(oauth::consent_page))
+                    .route("/consent", web::post().to(oauth::handle_consent))
+                    .route("/revoke", web::post().to(oauth::revoke_token))
+                    .route("/token", web::post().to(oauth::token_exchange))
+                    .route("/introspect", web::post().to(oauth::introspect_token))
+                    .route("/userinfo", web::get().to(oauth::userinfo))
+            )
 
             // rate limited routes
             .service(

@@ -109,7 +109,7 @@ pub fn generate_id_token(user_id: i32, username: String, client_id: String) -> R
 }
 
 // for client credentials
-pub fn generate_client_token(client_id: String, scope: String) -> Result<String, Box<dyn std::error::Error>> {
+pub fn generate_client_token(client_id: String, _scope: String) -> Result<String, Box<dyn std::error::Error>> {
     let now = Utc::now();
     let expiration = now + Duration::hours(1);  // Shorter for service tokens
     

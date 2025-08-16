@@ -249,256 +249,9 @@ pub async fn token_exchange(pool: web::Data<PgPool>, form: web::Form<TokenReques
     
     match form.grant_type.as_str() {
 
-        // Authorization Code handling
-        "authorization_code" => {
-
-            let Some(code) = form.code.as_deref() else {
-                return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-                    "error": "invalid_request",
-                    "error_description": "Missing 'code' for grant_type=authorization_code"
-                })));
-            };
-
-            let Some(redirect_uri) = form.redirect_uri.as_deref() else {
-                return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-                    "error": "invalid_request",
-                    "error_description": "Missing 'redirect_uri' for grant_type=authorization_code"
-                })));
-            };
-            
-            let auth_code = match validate_authorization_code(&pool, code, &form.client_id, redirect_uri).await {
-                Ok(code) => code,
-                Err(error_response) => {
-                    return Ok(HttpResponse::BadRequest().json(error_response));
-                }
-            };
-
-
-            // Validate PKCE if used
-            if let Some(code_challenge) = &auth_code.code_challenge {
-                if let Some(code_verifier) = &form.code_verifier {
-                    if !validate_pkce(code_challenge, &auth_code.code_challenge_method, code_verifier) {
-                        warn!("PKCE validation failed for client {}", form.client_id);
-                        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-                            "error": "invalid_grant",
-                            "error_description": "PKCE verification failed"
-                        })));
-                    }
-                } else {
-                    return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-                        "error": "invalid_request", 
-                        "error_description": "code_verifier required for PKCE"
-                    })));
-                }
-            }
-
-            // Get user information
-            let user = match get_user_by_id(&pool, auth_code.user_id).await {
-                Ok(user) => user,
-                Err(_) => {
-                    error!("User not found for auth code: {}", auth_code.user_id);
-                    return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-                        "error": "invalid_grant",
-                        "error_description": "Authorization code is invalid"
-                    })));
-                }
-            };
-
-            // Generate tokens
-            let access_token = match crate::jwt::generate_token(user.id, user.username.clone()) {
-                Ok(token) => token,
-                Err(e) => {
-                    error!("Failed to generate access token: {}", e);
-                    return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
-                        "error": "server_error",
-                        "error_description": "Failed to generate access token"
-                    })));
-                }
-            };
-
-            let id_token = match crate::jwt::generate_id_token(user.id, user.username.clone(), form.client_id.clone()) {
-                Ok(token) => Some(token),
-                Err(e) => {
-                    warn!("Failed to generate ID token: {}", e);
-                    None // ID token is optional, continue without it
-                }
-            };
-
-            // Generate and store refresh token
-            let refresh_token = crate::jwt::generate_refresh_token();
-            let refresh_expires_at = chrono::Utc::now() + chrono::Duration::days(30); // 30 days
-
-            if let Err(e) = store_refresh_token(&pool, &refresh_token, user.id, &form.client_id, auth_code.scope.as_deref(), refresh_expires_at).await {
-                error!("Failed to store refresh token: {}", e);
-                // Continue without refresh token rather than failing
-            }
-
-            // Delete used authorization code (single-use security)
-            if let Err(e) = delete_authorization_code(&pool, code).await {
-                warn!("Failed to delete authorization code: {}", e);
-                // Not critical, continue
-            }
-
-            info!("Token exchange successful for user {} and client {}", user.id, form.client_id);
-
-            // Return token response
-            Ok(HttpResponse::Ok().json(TokenResponse {
-                access_token,
-                token_type: "Bearer".to_string(),
-                expires_in: 24 * 60 * 60, // 24 hours
-                refresh_token: Some(refresh_token),
-                id_token,
-            }))
-        }
-
-        // Refresh token handling
-        "refresh_token" => {
-            
-            let refresh_token = match &form.refresh_token {
-                Some(token) => token,
-                None => return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-                    "error": "invalid_request",
-                    "error_description": "refresh_token required"
-                }))),
-            };
-
-            // Validate refresh token
-            let (user_id, scope) = match validate_refresh_token(&pool, refresh_token).await {
-                Ok(data) => data,
-                Err(_) => return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-                    "error": "invalid_grant",
-                    "error_description": "Invalid or expired refresh token"
-                }))),
-            };
-
-            // Check if matches client
-            let stored_client_id: String = sqlx::query_scalar::<_, String>(
-                    "SELECT client_id FROM refresh_tokens WHERE token = $1"
-                )
-                .bind(refresh_token)
-                .fetch_one(pool.get_ref())
-                .await
-                .unwrap_or_default();
-
-            if stored_client_id != form.client_id {
-                return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-                    "error": "invalid_grant",
-                    "error_description": "Refresh token does not belong to this client"
-                })));
-            }
-
-            // Get user
-            let user = match get_user_by_id(&pool, user_id).await {
-                Ok(user) => user,
-                Err(_) => return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-                    "error": "invalid_grant",
-                    "error_description": "User not found"
-                }))),
-            };
-
-            // Generate new tokens
-            let access_token = match generate_token(user.id, user.username.clone()) {
-                Ok(token) => token,
-                Err(e) => {
-                    error!("Failed to generate access token: {}", e);
-                    return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
-                        "error": "server_error",
-                        "error_description": "Failed to generate access token"
-                    })));
-                }
-            };
-
-            let id_token = match generate_id_token(user.id, user.username.clone(), form.client_id.clone()) {
-                Ok(token) => Some(token),
-                Err(e) => {
-                    warn!("Failed to generate ID token: {}", e);
-                    None
-                }
-            };
-
-            // Rotate refresh token (revoke or invalidate old and issue new)
-            let new_refresh_token = rotate_refresh_token();
-            let refresh_expires_at = Utc::now() + Duration::days(30);
-
-            // Atomic transaction: revoke old, store new
-            let mut tx = pool.begin().await.unwrap();
-            if let Err(e) = sqlx::query(
-                "UPDATE refresh_tokens SET revoked_at = NOW() WHERE token = $1")
-                .bind(refresh_token)
-                .execute(&mut *tx).await {
-                tx.rollback().await.unwrap();
-                error!("Failed to revoke old refresh token: {}", e);
-                return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
-                    "error": "server_error",
-                    "error_description": "Failed to rotate refresh token"
-                })));
-            }
-
-            if let Err(e) = sqlx::query(
-                "INSERT INTO refresh_tokens (token, user_id, client_id, scope, expires_at) VALUES ($1, $2, $3, $4, $5)")
-                .bind(&new_refresh_token)
-                .bind(user.id)
-                .bind(&form.client_id)
-                .bind(scope.as_deref())
-                .bind(refresh_expires_at)
-                .execute(&mut *tx).await {
-                tx.rollback().await.unwrap();
-                error!("Failed to store new refresh token: {}", e);
-                return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
-                    "error": "server_error",
-                    "error_description": "Failed to rotate refresh token"
-                })));
-            }
-            tx.commit().await.unwrap();
-
-            // Return new tokens
-            Ok(HttpResponse::Ok().json(TokenResponse {
-                access_token,
-                token_type: "Bearer".to_string(),
-                expires_in: 24 * 60 * 60,
-                refresh_token: Some(new_refresh_token),
-                id_token,
-            }))
-        }
-
-        "client_credentials" => {
-            // For client creds grant, doesnt involve user
-            if !client.is_confidential {
-                return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-                    "error": "unauthorized_client",
-                    "error_description": "Public clients cannot use client_credentials grant"
-                })));
-            }
-
-            let requested_scope = form.scope.clone().unwrap_or_default();
-            if !is_scope_allowed(&client.scope, &requested_scope) {
-                return Ok(HttpResponse::BadRequest().json(serde_json::json!({
-                    "error": "invalid_scope",
-                    "error_description": "Requested scope not allowed"
-                })));
-            }
-
-            let access_token = match generate_client_token(client.client_id.clone(), requested_scope) {
-                Ok(token) => token,
-                Err(e) => {
-                    error!("Failed to generate client token: {}", e);
-                    return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
-                        "error": "server_error",
-                        "error_description": "Failed to generate access token"
-                    })));
-                }
-            };
-
-            Ok(HttpResponse::Ok().json(TokenResponse {
-                access_token,
-                token_type: "Bearer".to_string(),
-                expires_in: 3600,  // 1 hour
-                refresh_token: None,  // No refresh for client creds
-                id_token: None,  // No ID token
-            }))
-        }
-
-
+        "authorization_code" => handle_authorization_code_grant(&pool, &form, &client).await,
+        "refresh_token"      => handle_refresh_token_grant(pool, &form).await,
+        "client_credentials" => handle_client_credentials_grant(&form, &client).await,
         _ => Ok(HttpResponse::BadRequest().json(serde_json::json!({
             "error": "unsupported_grant_type",
             "error_description": "Unsupported grant type"
@@ -639,6 +392,38 @@ pub async fn introspect_token(pool: web::Data<PgPool>, form: web::Form<Introspec
         }
     }
 }
+
+// metrics
+pub async fn get_metrics(pool: web::Data<PgPool>) -> Result<HttpResponse> {
+    let active_users: i64 = sqlx::query_scalar(
+        "SELECT COUNT(DISTINCT user_id) FROM refresh_tokens WHERE revoked_at IS NULL AND expires_at > NOW()"
+    )
+    .fetch_one(pool.get_ref())
+    .await
+    .unwrap_or(0);
+
+    let total_clients: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM oauth_clients")
+        .fetch_one(pool.get_ref())
+        .await
+        .unwrap_or(0);
+
+    let metrics = format!(
+        "# HELP active_users Number of users with active refresh tokens\n\
+         # TYPE active_users gauge\n\
+         active_users {}\n\
+         # HELP total_clients Number of registered OAuth clients\n\
+         # TYPE total_clients gauge\n\
+         total_clients {}\n",
+        active_users, total_clients
+    );
+
+    Ok(HttpResponse::Ok()
+        .content_type("text/plain; version=0.0.4")
+        .body(metrics))
+
+}
+
+
 
 
 
@@ -955,6 +740,251 @@ async fn validate_refresh_token(pool: &PgPool, token: &str) -> Result<(i32, Opti
     }
 }
 
+
+async fn handle_authorization_code_grant(pool: &PgPool, form: &TokenRequest, _client: &OAuthClient) -> Result<HttpResponse> {
+    let Some(code) = form.code.as_deref() else {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid_request",
+            "error_description": "Missing 'code' for grant_type=authorization_code"
+        })));
+    };
+
+    let Some(redirect_uri) = form.redirect_uri.as_deref() else {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid_request",
+            "error_description": "Missing 'redirect_uri' for grant_type=authorization_code"
+        })));
+    };
+    
+    let auth_code = match validate_authorization_code(&pool, code, &form.client_id, redirect_uri).await {
+        Ok(code) => code,
+        Err(error_response) => {
+            return Ok(HttpResponse::BadRequest().json(error_response));
+        }
+    };
+
+
+    // Validate PKCE if used
+    if let Some(code_challenge) = &auth_code.code_challenge {
+        if let Some(code_verifier) = &form.code_verifier {
+            if !validate_pkce(code_challenge, &auth_code.code_challenge_method, code_verifier) {
+                warn!("PKCE validation failed for client {}", form.client_id);
+                return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                    "error": "invalid_grant",
+                    "error_description": "PKCE verification failed"
+                })));
+            }
+        } else {
+            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "invalid_request", 
+                "error_description": "code_verifier required for PKCE"
+            })));
+        }
+    }
+
+    // Get user information
+    let user = match get_user_by_id(&pool, auth_code.user_id).await {
+        Ok(user) => user,
+        Err(_) => {
+            error!("User not found for auth code: {}", auth_code.user_id);
+            return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "invalid_grant",
+                "error_description": "Authorization code is invalid"
+            })));
+        }
+    };
+
+    // Generate tokens
+    let access_token = match crate::jwt::generate_token(user.id, user.username.clone()) {
+        Ok(token) => token,
+        Err(e) => {
+            error!("Failed to generate access token: {}", e);
+            return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "server_error",
+                "error_description": "Failed to generate access token"
+            })));
+        }
+    };
+
+    let id_token = match crate::jwt::generate_id_token(user.id, user.username.clone(), form.client_id.clone()) {
+        Ok(token) => Some(token),
+        Err(e) => {
+            warn!("Failed to generate ID token: {}", e);
+            None // ID token is optional, continue without it
+        }
+    };
+
+    // Generate and store refresh token
+    let refresh_token = crate::jwt::generate_refresh_token();
+    let refresh_expires_at = chrono::Utc::now() + chrono::Duration::days(30); // 30 days
+
+    if let Err(e) = store_refresh_token(&pool, &refresh_token, user.id, &form.client_id, auth_code.scope.as_deref(), refresh_expires_at).await {
+        error!("Failed to store refresh token: {}", e);
+        // Continue without refresh token rather than failing
+    }
+
+    // Delete used authorization code (single-use security)
+    if let Err(e) = delete_authorization_code(&pool, code).await {
+        warn!("Failed to delete authorization code: {}", e);
+        // Not critical, continue
+    }
+
+    info!("Token exchange successful for user {} and client {}", user.id, form.client_id);
+
+    // Return token response
+    Ok(HttpResponse::Ok().json(TokenResponse {
+        access_token,
+        token_type: "Bearer".to_string(),
+        expires_in: 24 * 60 * 60, // 24 hours
+        refresh_token: Some(refresh_token),
+        id_token,
+    }))
+}
+
+
+async fn handle_refresh_token_grant(pool: web::Data<PgPool> ,form: &TokenRequest) -> Result<HttpResponse> {
+    let refresh_token = match &form.refresh_token {
+        Some(token) => token,
+        None => return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid_request",
+            "error_description": "refresh_token required"
+        }))),
+    };
+
+    // Validate refresh token
+    let (user_id, scope) = match validate_refresh_token(&pool, refresh_token).await {
+        Ok(data) => data,
+        Err(_) => return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid_grant",
+            "error_description": "Invalid or expired refresh token"
+        }))),
+    };
+
+    // Check if matches client
+    let stored_client_id: String = sqlx::query_scalar::<_, String>(
+            "SELECT client_id FROM refresh_tokens WHERE token = $1"
+        )
+        .bind(refresh_token)
+        .fetch_one(pool.get_ref())
+        .await
+        .unwrap_or_default();
+
+    if stored_client_id != form.client_id {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid_grant",
+            "error_description": "Refresh token does not belong to this client"
+        })));
+    }
+
+    // Get user
+    let user = match get_user_by_id(&pool, user_id).await {
+        Ok(user) => user,
+        Err(_) => return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid_grant",
+            "error_description": "User not found"
+        }))),
+    };
+
+    // Generate new tokens
+    let access_token = match generate_token(user.id, user.username.clone()) {
+        Ok(token) => token,
+        Err(e) => {
+            error!("Failed to generate access token: {}", e);
+            return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "server_error",
+                "error_description": "Failed to generate access token"
+            })));
+        }
+    };
+
+    let id_token = match generate_id_token(user.id, user.username.clone(), form.client_id.clone()) {
+        Ok(token) => Some(token),
+        Err(e) => {
+            warn!("Failed to generate ID token: {}", e);
+            None
+        }
+    };
+
+    // Rotate refresh token (revoke or invalidate old and issue new)
+    let new_refresh_token = rotate_refresh_token();
+    let refresh_expires_at = Utc::now() + Duration::days(30);
+
+    // Atomic transaction: revoke old, store new
+    let mut tx = pool.begin().await.unwrap();
+    if let Err(e) = sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = NOW() WHERE token = $1")
+        .bind(refresh_token)
+        .execute(&mut *tx).await {
+        tx.rollback().await.unwrap();
+        error!("Failed to revoke old refresh token: {}", e);
+        return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": "server_error",
+            "error_description": "Failed to rotate refresh token"
+        })));
+    }
+
+    if let Err(e) = sqlx::query(
+        "INSERT INTO refresh_tokens (token, user_id, client_id, scope, expires_at) VALUES ($1, $2, $3, $4, $5)")
+        .bind(&new_refresh_token)
+        .bind(user.id)
+        .bind(&form.client_id)
+        .bind(scope.as_deref())
+        .bind(refresh_expires_at)
+        .execute(&mut *tx).await {
+        tx.rollback().await.unwrap();
+        error!("Failed to store new refresh token: {}", e);
+        return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": "server_error",
+            "error_description": "Failed to rotate refresh token"
+        })));
+    }
+    tx.commit().await.unwrap();
+
+    // Return new tokens
+    Ok(HttpResponse::Ok().json(TokenResponse {
+        access_token,
+        token_type: "Bearer".to_string(),
+        expires_in: 24 * 60 * 60,
+        refresh_token: Some(new_refresh_token),
+        id_token,
+    }))
+}
+
+async fn handle_client_credentials_grant(form: &TokenRequest, client: &OAuthClient) -> Result<HttpResponse> {
+     if !client.is_confidential {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "unauthorized_client",
+            "error_description": "Public clients cannot use client_credentials grant"
+        })));
+    }
+
+    let requested_scope = form.scope.clone().unwrap_or_default();
+    if !is_scope_allowed(&client.scope, &requested_scope) {
+        return Ok(HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "invalid_scope",
+            "error_description": "Requested scope not allowed"
+        })));
+    }
+
+    let access_token = match generate_client_token(client.client_id.clone(), requested_scope) {
+        Ok(token) => token,
+        Err(e) => {
+            error!("Failed to generate client token: {}", e);
+            return Ok(HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "server_error",
+                "error_description": "Failed to generate access token"
+            })));
+        }
+    };
+
+    Ok(HttpResponse::Ok().json(TokenResponse {
+        access_token,
+        token_type: "Bearer".to_string(),
+        expires_in: 3600,  // 1 hour
+        refresh_token: None,  // No refresh for client creds
+        id_token: None,  // No ID token
+    }))
+}
 
 // pages
 
