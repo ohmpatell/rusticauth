@@ -124,6 +124,11 @@ async fn main() -> std::io::Result<()> {
             .route("/oauth/login", web::post().to(oauth::oauth_login))
             .route("/oauth/consent", web::get().to(oauth::consent_page))
             .route("/oauth/consent", web::post().to(oauth::handle_consent))
+            .route("/oauth/revoke", web::post().to(oauth::revoke_token))
+
+            // OIDC routes
+            .route("/.well-known/openid-configuration", web::get().to(oauth::oidc_discovery))
+            .route("/oauth/userinfo", web::get().to(oauth::userinfo))
 
             //jwt verification
             .route("/me", web::get().to(auth::get_user_profile))

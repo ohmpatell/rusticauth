@@ -45,7 +45,7 @@ impl JWTClaims {
 
 // generate a new token
 pub fn generate_token(user_id: i32, username: String) -> Result<String, JWTError> {
-    let secret = env::var("JWT_SECRET").map_err(|_| JWTError::MissingSecret)?;
+    let secret: String = env::var("JWT_SECRET").map_err(|_| JWTError::MissingSecret)?;
 
     let claims = JWTClaims::new(user_id, username);
 
@@ -108,10 +108,36 @@ pub fn generate_id_token(user_id: i32, username: String, client_id: String) -> R
     }
 }
 
+// for client credentials
+pub fn generate_client_token(client_id: String, scope: String) -> Result<String, Box<dyn std::error::Error>> {
+    let now = Utc::now();
+    let expiration = now + Duration::hours(1);  // Shorter for service tokens
+    
+    let claims = JWTClaims {
+        sub: client_id,  // client as subject
+        username: "service".to_string(),  // Placeholder cuz its just a client token not a user one
+        exp: expiration.timestamp(),
+        iat: now.timestamp(),
+        iss: "RusticAuth".to_string(),
+    };
+    
+    let secret = env::var("JWT_SECRET")?;
+    let header = Header::default();
+    let encoding_key = EncodingKey::from_secret(secret.as_ref());
+    
+    let token = encode(&header, &claims, &encoding_key)?;
+    Ok(token)
+
+}
+
 // secure refresh token - long lived
 pub fn generate_refresh_token() -> String {
     let mut rng = thread_rng();
     let mut token_bytes = [0u8; 32];
     rng.fill(& mut token_bytes);
     BASE64.encode(token_bytes)
+}
+
+pub fn rotate_refresh_token() -> String {
+    generate_refresh_token()
 }

@@ -131,6 +131,7 @@ pub struct RefreshToken {
     pub scope: Option<String>,
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
 }
 
 // OAuth Authorization Request - what we get when someone hits /authorize
@@ -197,11 +198,14 @@ pub struct ErrorPageContext {
 #[derive(Debug, Deserialize)]
 pub struct TokenRequest {
     pub grant_type: String, // should be "authorization_code"
-    pub code: String,
-    pub redirect_uri: String,
+    pub code: Option<String>,  // For auth_code
+    pub redirect_uri: Option<String>,
     pub client_id: String,
     pub client_secret: Option<String>, // only for confidential clients
     pub code_verifier: Option<String>, // PKCE
+    pub refresh_token: Option<String>,  // For refresh grant
+    pub scope: Option<String> // Just for client token requests
+    
 }
 
 // OAuth Token Response - what we send back from /token
@@ -212,6 +216,14 @@ pub struct TokenResponse {
     pub expires_in: i64, // seconds
     pub refresh_token: Option<String>,
     pub id_token: Option<String>, // for OpenID Connect
+}
+
+// Token Revocation request
+#[derive(Debug, Deserialize)]
+pub struct RevokeRequest {
+    pub token: String,
+    pub client_id: String,
+    pub client_secret: Option<String>,
 }
 
 // Token Introspection models
@@ -234,4 +246,30 @@ pub struct IntrospectResponse {
     pub scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exp: Option<i64>,
+}
+
+
+// OIDC Discovery config
+#[derive(Debug, Serialize)]
+pub struct OidcDiscovery {
+    pub issuer: String,
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
+    pub userinfo_endpoint: String,
+    pub jwks_uri: String,  // Future: JSON Web Key Set
+    pub revocation_endpoint: String,
+    pub introspection_endpoint: String,
+    pub scopes_supported: Vec<String>,
+    pub response_types_supported: Vec<String>,
+    pub grant_types_supported: Vec<String>,
+    pub token_endpoint_auth_methods_supported: Vec<String>,
+    pub id_token_signing_alg_values_supported: Vec<String>,
+}
+
+// UserInfo response
+#[derive(Debug, Serialize)]
+pub struct UserInfoResponse {
+    pub sub: String,
+    pub name: String,
+    pub preferred_username: String,
 }
