@@ -37,13 +37,45 @@ async fn health_check(pool: web::Data<sqlx::PgPool>) -> Result<HttpResponse> {
     }
 }
 
-async fn hello() -> Result<HttpResponse> {
+// Add to main.rs startup
+fn validate_environment() -> Result<(), String> {
+    let required_vars = [
+        "DATABASE_URL",
+        "JWT_SECRET", 
+        "SESSION_SECRET"
+    ];
+    
+    for var in &required_vars {
+        env::var(var).map_err(|_| format!("{} must be set", var))?;
+    }
+    
+    let jwt_secret = env::var("JWT_SECRET").unwrap();
+    if jwt_secret.len() < 32 {
+        return Err("JWT_SECRET must be at least 32 characters long".to_string());
+    }
+    
+    Ok(())
+}
+
+async fn api_info() -> Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(serde_json::json!({
-        "message": "Hello, RusticAuth OAuth2 Server!",
-        "version": "0.7.0", 
-        "oauth2_flows": ["authorization_code"],
-        "features": ["user_auth", "client_management", "authorization_flow", "token_exchange", "pkce_support", "openid_connect"]  // ← Add new features
-    })))
+        "service": "RusticAuth OAuth2 Server",
+        "version": "1.0.0",
+        "features": [
+            "oauth2_authorization_code",
+            "oauth2_refresh_token", 
+            "oauth2_client_credentials",
+            "openid_connect",
+            "pkce",
+            "token_revocation"
+        ],
+        "endpoints": {
+            "auth": ["/register", "/login", "/me"],
+            "oauth": ["/oauth/authorize", "/oauth/token", "/oauth/userinfo"],
+            "admin": ["/admin/clients", "/admin/metrics"],
+            "system": ["/health", "/.well-known/openid-configuration"]
+        }
+   })))
 }
 
 fn early_debug() {
@@ -57,6 +89,11 @@ async fn main() -> std::io::Result<()> {
 
     // load up env
     dotenv().ok();
+
+    if let Err(e) = validate_environment() {
+        eprintln!("Environment validation failed: {}", e);
+        std::process::exit(1);
+    }
     
     // get host & port from env
     let host = env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
@@ -85,8 +122,9 @@ async fn main() -> std::io::Result<()> {
     // init templates
     let templates = templates::init_templates();
 
-    // prod will use a fixed key, from .env?
-    let secret_key = Key::generate();
+    let session_secret = env::var("SESSION_SECRET")
+        .expect("SESSION_SECRET must be set");
+    let secret_key = Key::from(session_secret.as_bytes());
 
     let rate_limiter_config = GovernorConfigBuilder::default()
         .burst_size(5)                      // max burst
@@ -125,11 +163,8 @@ async fn main() -> std::io::Result<()> {
             .service(Files::new("/static", "./static"))
 
             // Routes
-            .route("/", web::get().to(hello))
+            .route("/", web::get().to(api_info))
             .route("/health", web::get().to(health_check))
-
-            // OAuth2 Authorization Flow Routes
-            
 
             // OIDC routes
             .route("/.well-known/openid-configuration", web::get().to(oauth::oidc_discovery))
@@ -138,14 +173,16 @@ async fn main() -> std::io::Result<()> {
             .route("/me", web::get().to(auth::get_user_profile))
             
             //admin only - oauth2 clients
-            .route("/admin/clients", web::post().to(clients::create_client))
-            .route("/admin/clients", web::get().to(clients::list_clients))
-            .route("/admin/clients/{client_id}", web::get().to(clients::get_client))
-            .route("/admin/clients/{client_id}", web::put().to(clients::update_client))
-            .route("/admin/clients/{client_id}", web::delete().to(clients::delete_client))
-            .route("/admin/metrics", web::get().to(oauth::get_metrics))
-
-            // tokens
+            // Admin routes (protected)
+            .service(
+                web::scope("/admin")
+                    .route("/clients", web::post().to(clients::create_client))
+                    .route("/clients", web::get().to(clients::list_clients))
+                    .route("/clients/{client_id}", web::get().to(clients::get_client))
+                    .route("/clients/{client_id}", web::put().to(clients::update_client))
+                    .route("/clients/{client_id}", web::delete().to(clients::delete_client))
+                    .route("/metrics", web::get().to(oauth::get_metrics))
+            )
             
             .service(
                 web::scope("/oauth")

@@ -1,68 +1,52 @@
 [package]
 name = "rusticauth"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 
 [dependencies]
+# Web framework
 actix-web = "4"
+actix-session = { version = "0.7", features = ["cookie-session"] }
+actix-files = "0.6"
+actix-web-httpauth = "0.8"
+actix-governor = "0.3"
 
-# Rate Limiter
-actix-governor     = "0.3"
+# Async runtime
+tokio = { version = "1", features = ["full"] }
 
-tokio = {version = "1", features = ["full"]}
-
+# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-dotenv = "0.15"
-
+# Database
 sqlx = { version = "0.6", features = ["runtime-actix-native-tls", "postgres", "macros", "chrono", "uuid"] }
 
-argon2 = "0.4" 
-
+# Security
+argon2 = "0.4"
 jsonwebtoken = "9"
+ring = "0.16"
 
-tower-http = { version = "0.3", features = ["cors", "trace", "request-id"] }
-
-# Date/time handling
+# Utilities
 chrono = { version = "0.4", features = ["serde"] }
-
-# Random generation (for codes, tokens)
 rand = "0.8"
+base64 = "0.21"
+url = "2.0"
+hex = "0.4"
+sha2 = "0.10"
 
-# Error handling
+# Error handling & logging
 anyhow = "1.0"
 thiserror = "1.0"
-
-# Logging
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tracing-actix-web = "0.7"
 
-# Cryptography (for JWT keys)
-ring = "0.16"
+# Environment
+dotenv = "0.15"
 
-# Base64 encoding/decoding
-base64 = "0.21"
+# Templates
+tera = "1.0"
 
-url = "2.0"
-
-tera = "1.0"              # HTML templating engine
-
-# Session management
-actix-session = { version = "0.7", features = ["cookie-session"] }
-
-# Static file serving
-actix-files = "0.6"       
-
-# HTTP authentication helpers
-actix-web-httpauth = "0.8"
-
-# For PKCE code challenges
-sha2 = "0.10"             
-
-# For encoding
-hex = "0.4"               
-
-# Secure cookie handling
-cookie = "0.17"           
+# HTTP utilities
+tower-http = { version = "0.3", features = ["cors", "trace", "request-id"] }
+cookie = "0.17"
